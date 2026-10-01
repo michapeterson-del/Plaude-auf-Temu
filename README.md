@@ -13,7 +13,8 @@ Jedes To-do landet per Knopfdruck direkt im **Aufgabenplaner** (Repo `To-do`, gl
 4. **Zusammenfassung** über *alle* Aufnahmen des Ordners: Kurzfassung, Stichpunkte nach Themen,
    To-dos (mit „wer“ und „bis wann“), Entscheidungen, offene Fragen.
 5. **To-dos**: abhaken oder mit dem Pfeil (einzeln) bzw. „Alle offenen senden“ in den Aufgabenplaner schicken.
-   Die Spalte (Heute / Prozess / Privat) wählst du in den Einstellungen. Alternativ: Apple Erinnerungen
+   Die **KI ordnet jedes To-do selbst einer Spalte zu** (☀️ Heute / 🔁 Prozess / 🔒 Privat). Ein Tipp auf die Spalte
+   ändert sie von Hand. In den Einstellungen lässt sich auch eine feste Spalte für alles einstellen. Alternativ: Apple Erinnerungen
    über einen Kurzbefehl, Things, Todoist oder das Teilen-Menü.
 6. **Export** – kopieren, teilen oder als Markdown-Datei speichern.
 
@@ -46,9 +47,16 @@ Jedes To-do landet per Knopfdruck direkt im **Aufgabenplaner** (Repo `To-do`, gl
 3. **Deploy** (bzw. nach dem Eintragen der Variablen einmal *Redeploy*).
 4. Die Vercel-Adresse in Safari öffnen → anmelden → **Teilen → Zum Home-Bildschirm**.
 
-Hinweis iPhone: Während der Aufnahme den Bildschirm anlassen (die App versucht das automatisch).
-Wird das Handy gesperrt, stoppt Safari das Mikrofon. Alles bis dahin Aufgenommene bleibt gespeichert.
-Hochgeladene Audiodateien dürfen höchstens 4 MB groß sein (Grenze von Vercel). Längeres lieber direkt in der App aufnehmen.
+### Aufnehmen, während man andere Apps nutzt oder das Handy sperrt
+
+iOS erlaubt Web-Apps **kein Mikrofon im Hintergrund**. Plaude geht damit so um:
+
+- Beim Verlassen der App wird alles bis dahin Aufgenommene sofort gespeichert.
+- Beim Zurückkommen läuft die Aufnahme **automatisch in derselben Aufnahme weiter** (angezeigt als „1× unterbrochen“).
+  Was in der Zwischenzeit gesagt wurde, ist allerdings nicht drauf.
+- **Für durchgehende Aufnahmen mit WhatsApp/gesperrtem Handy:** mit der Apple-App **Sprachmemos** aufnehmen
+  (läuft im Hintergrund weiter) → Memo teilen → **„In Dateien sichern“** → in Plaude **„Audiodatei hinzufügen“**.
+  Auch lange Memos gehen: Plaude teilt große Dateien selbst in kleine Stücke.
 
 ## Dateien
 

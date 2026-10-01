@@ -15,7 +15,7 @@ export async function POST(request) {
     .map((t) => ({
       title: String(t.title || "").trim().slice(0, 500),
       description: String(t.description || "").slice(0, 4000),
-      category,
+      category: CATEGORIES.includes(t.category) ? t.category : category,
       status: "open",
       source: "manual",
       steps: [],

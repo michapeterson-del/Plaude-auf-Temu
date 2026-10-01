@@ -7,7 +7,7 @@ const DEFAULTS = {
   polish: true,
   autoSummary: true,
   todoApp: "aufgabenplaner",
-  todoCategory: "today",
+  todoCategory: "auto",
   shortcutName: "Plaude To-do",
 };
 
@@ -149,22 +149,45 @@ function pickMime() {
   return candidates.find((t) => MediaRecorder.isTypeSupported?.(t)) ?? "";
 }
 
+const MIC_CONSTRAINTS = {
+  audio: { channelCount: 1, echoCancellation: false, noiseSuppression: true, autoGainControl: true },
+};
+
 class Recorder {
   constructor(recordingId, onSegment) {
     this.recordingId = recordingId;
     this.onSegment = onSegment;
     this.segmentIndex = 0;
     this.pending = [];
+    this.interruptions = 0;
+    this.stopped = false;
   }
 
   async start() {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: false, noiseSuppression: true, autoGainControl: true },
-    });
     this.mime = pickMime();
     this.startedAt = Date.now();
+    await this._openMic();
     this._startSegment();
+    this._onVisibility = () => {
+      if (document.visibilityState === "visible") this.recover();
+      // Beim Verlassen: bisheriges Stück sofort speichern, neues beginnen (falls iOS uns weiter lässt)
+      else this._rotate();
+    };
+    document.addEventListener("visibilitychange", this._onVisibility);
+    window.addEventListener("pageshow", this._onVisibility);
+    window.addEventListener("pagehide", this._flushBound = () => this._flush());
+  }
+
+  async _openMic() {
+    this.stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+    const track = this.stream.getAudioTracks()[0];
+    // iOS beendet das Mikrofon, wenn man die App verlässt: dann das bisherige Stück sichern
+    track.addEventListener("ended", () => this._flush());
     this._setupMeter();
+    this._lockScreen();
+  }
+
+  async _lockScreen() {
     try { this.wakeLock = await navigator.wakeLock?.request("screen"); } catch { /* nicht unterstützt */ }
   }
 
@@ -182,16 +205,56 @@ class Recorder {
         resolve();
       };
     });
+    // Falls der Browser die Aufnahme von sich aus beendet (Mikrofon weg), trotzdem speichern
+    rec.onerror = () => { try { rec.stop(); } catch { /* schon gestoppt */ } };
     rec.start(1000);
     this.current = rec;
     this.pending.push(done);
+    clearTimeout(this.segmentTimer);
     this.segmentTimer = setTimeout(() => this._rotate(), SEGMENT_MS);
   }
 
   _rotate() {
+    if (this.stopped || this.current?.state === "inactive") return;
     const old = this.current;
     this._startSegment();
     old.stop();
+  }
+
+  /** Aktuelles Stück sofort speichern (z. B. wenn die App in den Hintergrund geht). */
+  _flush() {
+    clearTimeout(this.segmentTimer);
+    if (this.current && this.current.state !== "inactive") {
+      try { this.current.stop(); } catch { /* egal */ }
+    }
+  }
+
+  /** Nach dem Zurückkehren in die App: Mikrofon wieder öffnen und weiter aufnehmen. */
+  async recover() {
+    if (this.stopped || this.recovering) return;
+    const track = this.stream?.getAudioTracks()[0];
+    const alive = track && track.readyState === "live" && !track.muted && this.current?.state === "recording";
+    if (alive) {
+      this.audioCtx?.resume?.();
+      if (!this.wakeLock || this.wakeLock.released) this._lockScreen();
+      return;
+    }
+    this.recovering = true;
+    try {
+      this._flush();
+      this.stream?.getTracks().forEach((t) => t.stop());
+      this.audioCtx?.close();
+      this.analyser = null;
+      await this._openMic();
+      if (this.stopped) { this.stream.getTracks().forEach((t) => t.stop()); return; }
+      this.interruptions++;
+      this._startSegment();
+      toast("Aufnahme läuft weiter.");
+    } catch {
+      toast("Mikrofon konnte nicht wieder geöffnet werden – bitte Aufnahme beenden und neu starten.", 6000);
+    } finally {
+      this.recovering = false;
+    }
   }
 
   _setupMeter() {
@@ -216,10 +279,13 @@ class Recorder {
   elapsed() { return (Date.now() - this.startedAt) / 1000; }
 
   async stop() {
-    clearTimeout(this.segmentTimer);
-    if (this.current?.state !== "inactive") this.current.stop();
+    this.stopped = true;
+    document.removeEventListener("visibilitychange", this._onVisibility);
+    window.removeEventListener("pageshow", this._onVisibility);
+    window.removeEventListener("pagehide", this._flushBound);
+    this._flush();
     await Promise.all(this.pending);
-    this.stream.getTracks().forEach((t) => t.stop());
+    this.stream?.getTracks().forEach((t) => t.stop());
     this.audioCtx?.close();
     try { await this.wakeLock?.release(); } catch { /* egal */ }
   }
@@ -269,7 +335,7 @@ async function stopRecording() {
   const duration = recorder.elapsed();
   activeRecorder = null;
   await recorder.stop();
-  const r = await updateRecording(recordingId, { status: "neu", duration });
+  const r = await updateRecording(recordingId, { status: "neu", duration, interruptions: recorder.interruptions });
   if (!r || !r.segments.length) {
     await store.deleteRecording(recordingId);
     toast("Die Aufnahme war leer.");
@@ -445,11 +511,20 @@ async function maybeAutoSummarize(folderId) {
    ============================================================ */
 async function importFiles(folderId, files) {
   for (const file of files) {
+    let segments = [{ index: 0, blob: file, mime: file.type, name: file.name }];
+    let duration;
     if (file.size > MAX_UPLOAD) {
-      toast(`„${file.name}“ ist größer als 4 MB – bitte direkt in der App aufnehmen (wird automatisch geteilt).`, 6000);
-      continue;
+      toast(`„${file.name}“ wird vorbereitet …`, 8000);
+      try {
+        ({ segments, duration } = await splitAudioFile(file));
+      } catch (err) {
+        console.error(err);
+        toast(`„${file.name}“ konnte nicht gelesen werden (zu lang oder unbekanntes Format).`, 6000);
+        continue;
+      }
+    } else {
+      duration = await probeDuration(file);
     }
-    const duration = await probeDuration(file);
     const rec = {
       id: uid(),
       folderId,
@@ -457,7 +532,7 @@ async function importFiles(folderId, files) {
       source: "datei",
       fileName: file.name,
       status: "neu",
-      segments: [{ index: 0, blob: file, mime: file.type, name: file.name }],
+      segments,
       duration,
       transcript: "",
       rawTranscript: "",
@@ -467,6 +542,55 @@ async function importFiles(folderId, files) {
   }
   await updateFolder(folderId, { updatedAt: Date.now(), summaryStale: true });
   render();
+}
+
+/* Große Dateien im Browser dekodieren und in kleine WAV-Stücke (Mono, Sprachqualität) schneiden,
+   damit jedes Stück durch den Server passt. */
+async function splitAudioFile(file) {
+  const data = await file.arrayBuffer();
+  let audio;
+  for (const rate of [16000, 22050, 24000, 44100]) {
+    try {
+      const ctx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, 1, rate);
+      audio = await new Promise((resolve, reject) => {
+        const p = ctx.decodeAudioData(data.slice(0), resolve, reject);
+        p?.then?.(resolve, reject);
+      });
+      break;
+    } catch (err) {
+      if (rate === 44100) throw err;
+    }
+  }
+  const rate = audio.sampleRate;
+  const channels = Array.from({ length: audio.numberOfChannels }, (_, c) => audio.getChannelData(c));
+  const chunkSamples = Math.floor((3.6 * 1024 * 1024) / 2) - 44; // 16 Bit pro Sample, < 4 MB pro Stück
+  const segments = [];
+  const base = file.name.replace(/\.[^.]+$/, "");
+  for (let start = 0, index = 0; start < audio.length; start += chunkSamples, index++) {
+    const end = Math.min(audio.length, start + chunkSamples);
+    const blob = encodeWav(channels, start, end, rate);
+    segments.push({ index, blob, mime: "audio/wav", name: `${base}-${index + 1}.wav` });
+  }
+  return { segments, duration: audio.duration };
+}
+
+function encodeWav(channels, start, end, rate) {
+  const n = end - start;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, n * 2, true);
+  const k = channels.length;
+  for (let i = 0; i < n; i++) {
+    let x = 0;
+    for (const ch of channels) x += ch[start + i];
+    x = Math.max(-1, Math.min(1, x / k));
+    v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+  }
+  return new Blob([buf], { type: "audio/wav" });
 }
 
 function probeDuration(blob) {
@@ -485,9 +609,25 @@ function probeDuration(blob) {
 /* ============================================================
    To-dos an die To-do-App schicken
    ============================================================ */
+const CATS = {
+  today: { icon: "☀️", label: "Heute" },
+  process: { icon: "🔁", label: "Prozess" },
+  private: { icon: "🔒", label: "Privat" },
+};
+const CAT_ORDER = ["today", "process", "private"];
+
+/** Spalte eines To-dos: eigene Wahl > feste Einstellung > Vorschlag der KI > Heute */
+function todoCategory(folder, t) {
+  const own = (folder.todoCat || {})[todoKey(t)];
+  if (own) return own;
+  if (settings.todoCategory && settings.todoCategory !== "auto") return settings.todoCategory;
+  return CATS[t.spalte] ? t.spalte : "today";
+}
+
 const todoLine = (t) => t.aufgabe + (t.bis ? ` (bis ${t.bis})` : "") + (t.wer ? ` – ${t.wer}` : "");
 
-async function sendTodos(todos, folderName) {
+async function sendTodos(todos, folder) {
+  const folderName = folder.name;
   if (!todos.length) return false;
   const app = settings.todoApp || DEFAULTS.todoApp;
   const lines = todos.map(todoLine);
@@ -499,9 +639,9 @@ async function sendTodos(todos, folderName) {
       try {
         const { count } = await api("/api/todo", {
           body: {
-            category: settings.todoCategory,
             tasks: todos.map((t) => ({
               title: t.aufgabe,
+              category: todoCategory(folder, t),
               description: [t.wer && `Wer: ${t.wer}`, t.bis && `Bis: ${t.bis}`, `Aus Aufnahme: ${folderName}`].filter(Boolean).join("\n"),
             })),
           },
@@ -547,7 +687,7 @@ async function sendAndMark(folderId, keys) {
   const f = await store.folder(folderId);
   const all = [...(f.summary?.todos || []), ...(f.extraTodos || [])];
   const todos = all.filter((t) => keys.includes(todoKey(t)));
-  const ok = await sendTodos(todos, f.name);
+  const ok = await sendTodos(todos, f);
   if (ok) {
     await updateFolder(folderId, (x) => {
       const sent = { ...(x.todoSent || {}) };
@@ -702,7 +842,7 @@ async function renderFolder(id) {
         <div class="meter"><span id="meter-bar"></span></div>
         <div class="rec-time" id="rec-time">${fmtDuration(activeRecorder.recorder.elapsed())}</div>
         <button class="btn stop big" data-action="stop"><span class="stop-sq" aria-hidden="true"></span> Aufnahme beenden</button>
-        <p class="hint">Bildschirm anlassen – auf dem iPhone stoppt die Aufnahme sonst beim Sperren.</p>
+        <p class="hint">Am iPhone pausiert das Mikrofon, solange du in einer anderen App bist oder das Handy gesperrt ist. Beim Zurückkommen läuft die Aufnahme automatisch weiter. Für lange Aufnahmen im Hintergrund die Sprachmemos-App nutzen und die Datei hier hinzufügen.</p>
       </div>`
     : `<div class="recorder">
         <button class="btn primary big" data-action="record" ${otherRec ? "disabled" : ""}>
@@ -738,10 +878,12 @@ async function renderFolder(id) {
           ${todos.map((t) => {
             const k = todoKey(t);
             const meta = [t.wer, t.bis].filter(Boolean).join(" · ");
+            const cat = CATS[todoCategory(f, t)];
             return `<li><label class="${done[k] ? "done" : ""}">
               <input type="checkbox" data-todo="${esc(k)}" ${done[k] ? "checked" : ""}>
               <span>${esc(t.aufgabe)}${meta ? `<small>${esc(meta)}</small>` : ""}</span>
             </label>
+            ${settings.todoApp === "aufgabenplaner" ? `<button class="cat" data-action="cycle-cat" data-key="${esc(k)}" title="Spalte ändern">${cat.icon} ${cat.label}</button>` : ""}
             <button class="send ${sent[k] ? "sent" : ""}" data-action="send-todo" data-key="${esc(k)}" aria-label="An To-do-App senden" title="${sent[k] ? "Schon gesendet – nochmal senden" : "An To-do-App senden"}">
               ${sent[k]
                 ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>`
@@ -786,7 +928,7 @@ async function renderFolder(id) {
         <header class="rec-head">
           <div>
             <strong>Aufnahme ${i + 1}</strong>
-            <span class="muted">${fmtTime(r.createdAt)} · ${fmtDuration(r.duration)}${r.fileName ? ` · ${esc(r.fileName)}` : ""}</span>
+            <span class="muted">${fmtTime(r.createdAt)} · ${fmtDuration(r.duration)}${r.fileName ? ` · ${esc(r.fileName)}` : ""}${r.interruptions ? ` · ${r.interruptions}× unterbrochen` : ""}</span>
           </div>
           ${working || r.status === "aufnahme" ? `<span class="status"><span class="spinner"></span>${esc(statusText)}</span>` : ""}
           ${r.status === "fehler" ? `<span class="status err">Fehler</span>` : ""}
@@ -925,6 +1067,15 @@ view.addEventListener("click", async (e) => {
     }
     case "summarize": runSummary(route.id); break;
     case "send-todo": await sendAndMark(route.id, [btn.dataset.key]); break;
+    case "cycle-cat": {
+      const f = await store.folder(route.id);
+      const t = [...(f.summary?.todos || []), ...(f.extraTodos || [])].find((x) => todoKey(x) === btn.dataset.key);
+      if (!t) break;
+      const next = CAT_ORDER[(CAT_ORDER.indexOf(todoCategory(f, t)) + 1) % CAT_ORDER.length];
+      await updateFolder(route.id, (x) => ({ todoCat: { ...(x.todoCat || {}), [btn.dataset.key]: next } }));
+      render();
+      break;
+    }
     case "send-all": {
       const f = await store.folder(route.id);
       const done = f.todoDone || {}, sent = f.todoSent || {};

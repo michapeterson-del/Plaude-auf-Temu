@@ -20,6 +20,11 @@ Alle Aufnahmen gehören zu einem Ordner und werden gemeinsam als ein Vorgang aus
 - Kurzfassung: knapp und konkret.
 - Stichpunkte: nach Themen gruppiert, kurze Stichpunkte statt ganzer Sätze; Zahlen, Mengen, Preise, Termine und Namen genau übernehmen.
 - To-dos: jede Aufgabe, Besorgung oder Zusage, die aus den Aufnahmen hervorgeht (auch Einkaufslisten-Punkte einzeln). „wer“ und „bis“ nur füllen, wenn es gesagt wurde.
+- Ordne jedes To-do genau einer Spalte des Aufgabenplaners zu:
+  • "today" (Heute): konkrete, erledigbare berufliche/geschäftliche Aufgaben – anrufen, bestellen, Angebot schreiben, Material besorgen, Termin machen.
+  • "process" (Prozesse & Optimierungen): übergeordnete Themen und Verbesserungen, die nicht in einem Schritt erledigt sind – Abläufe ändern, etwas einführen, optimieren, Strategie, „müssten wir mal grundsätzlich …“.
+  • "private" (Privat): alles Persönliche außerhalb der Arbeit – Familie, Freunde, Haushalt, privater Einkauf, Gesundheit, Freizeit.
+  Im Zweifel zwischen "today" und "process": konkrete Einzelaufgabe → "today".
 - Entscheidungen und offene Fragen nur, wenn es welche gibt (sonst leere Liste).
 Erfinde nichts, was nicht in den Aufnahmen vorkommt.`;
 
@@ -44,11 +49,12 @@ const SUMMARY_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["aufgabe", "wer", "bis"],
+        required: ["aufgabe", "wer", "bis", "spalte"],
         properties: {
           aufgabe: { type: "string", description: "Konkrete Aufgabe, mit Verb formuliert." },
           wer: { type: "string", description: "Zuständige Person, leer wenn nicht genannt." },
           bis: { type: "string", description: "Frist/Zeitpunkt wie genannt, leer wenn nicht genannt." },
+          spalte: { type: "string", enum: ["today", "process", "private"], description: "Spalte im Aufgabenplaner." },
         },
       },
     },
