@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Plaude – Aufnahmen &amp; Notizen</title>
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#111111">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Plaude">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="icon-btn" id="back" aria-label="Zurück" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <h1 id="title">Plaude</h1>
+    <button class="icon-btn" id="open-settings" aria-label="Einstellungen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </header>
+
+  <main id="view" class="view"></main>
+
+  <!-- Einstellungen -->
+  <dialog id="settings">
+    <form method="dialog" id="settings-form">
+      <h2>Einstellungen</h2>
+      <p class="hint">Die Schlüssel bleiben nur auf diesem Gerät gespeichert und werden direkt an OpenAI bzw. Anthropic geschickt.</p>
+
+      <label>OpenAI-API-Schlüssel <small>(Transkription)</small>
+        <input type="password" name="openaiKey" autocomplete="off" placeholder="sk-…">
+      </label>
+      <label>Anthropic-API-Schlüssel <small>(Zusammenfassung &amp; Nachbessern)</small>
+        <input type="password" name="anthropicKey" autocomplete="off" placeholder="sk-ant-…">
+      </label>
+
+      <label>To-dos senden an
+        <select name="todoApp">
+          <option value="shortcut">Apple Erinnerungen (über Kurzbefehl)</option>
+          <option value="things">Things</option>
+          <option value="todoist">Todoist</option>
+          <option value="share">Teilen-Menü (jede andere App)</option>
+        </select>
+      </label>
+      <div class="shortcut-only">
+        <label>Name des Kurzbefehls
+          <input type="text" name="shortcutName" placeholder="Plaude To-do">
+        </label>
+        <p class="hint">Einmalig in der Kurzbefehle-App anlegen: <b>Text teilen</b> (nach Zeilenumbrüchen) → <b>Wiederholen mit jedem</b> → <b>Erinnerung hinzufügen</b> (Wiederholungsobjekt). Name genau wie oben.</p>
+      </div>
+
+      <details>
+        <summary>Erweitert</summary>
+        <label>Transkriptions-Modell
+          <input type="text" name="sttModel" list="stt-models">
+          <datalist id="stt-models">
+            <option value="gpt-4o-transcribe">
+            <option value="gpt-4o-mini-transcribe">
+            <option value="whisper-1">
+          </datalist>
+        </label>
+        <label>Sprache (ISO-Code)
+          <input type="text" name="language" placeholder="de" maxlength="5">
+        </label>
+        <label>Fachbegriffe / Namen <small>(hilft der Erkennung, kommagetrennt)</small>
+          <textarea name="vocabulary" rows="2" placeholder="z. B. Wallbox, Zählerschrank, Herr Linge"></textarea>
+        </label>
+        <label>Claude-Modell
+          <input type="text" name="claudeModel">
+        </label>
+        <label class="check"><input type="checkbox" name="polish"> Transkript mit Claude nachbessern (Erkennungsfehler, Satzzeichen, Absätze)</label>
+        <label class="check"><input type="checkbox" name="autoSummary"> Zusammenfassung automatisch aktualisieren</label>
+      </details>
+
+      <div class="row end">
+        <button type="submit" class="btn primary">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
