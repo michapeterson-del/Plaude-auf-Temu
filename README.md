@@ -1,71 +1,70 @@
 # Plaude – Aufnahmen, Transkript, Zusammenfassung & To-dos
 
-Kleine Web-App fürs Handy: Gespräche aufnehmen, sauber transkribieren lassen und pro **Ordner**
+Web-App fürs Handy: Gespräche aufnehmen, sauber transkribieren lassen und pro **Ordner**
 (z. B. „Einkauf Baumarkt 14:30“) eine gemeinsame Zusammenfassung mit Stichpunkten und To-dos bekommen.
-Jedes To-do lässt sich per Knopfdruck an die eigene To-do-App schicken.
+Jedes To-do landet per Knopfdruck direkt im **Aufgabenplaner** (Repo `To-do`, gleiche Supabase-Datenbank).
 
 ## So funktioniert's
 
 1. **Ordner anlegen** (oder „Sofort aufnehmen“ – dann heißt der Ordner nach Datum und Uhrzeit).
-2. **Aufnehmen** – beliebig viele Aufnahmen pro Ordner. Vorhandene Audiodateien (z. B. Sprachmemos) lassen sich auch hinzufügen.
-3. **Transkription**: Lange Aufnahmen werden automatisch in 8-Minuten-Stücke geteilt und mit OpenAI
-   `gpt-4o-transcribe` in Text umgewandelt. Danach bessert Claude den Text nach: Erkennungsfehler, Zeichensetzung, Absätze, Füllwörter.
-   Den Originaltext gibt es weiterhin unter „Original-Erkennung“.
-4. **Zusammenfassung** über *alle* Aufnahmen des Ordners mit Claude: Kurzfassung, Stichpunkte nach Themen,
-   To-dos (mit „wer“ und „bis wann“), Entscheidungen und offene Fragen.
-5. **To-dos abhaken** oder mit dem Pfeil-Knopf an die To-do-App senden (einzeln oder „Alle offenen senden“).
-6. **Exportieren** – kopieren, teilen oder als Markdown-Datei speichern.
+2. **Aufnehmen** – beliebig viele Aufnahmen pro Ordner. Lange Aufnahmen werden automatisch in 4-Minuten-Stücke geteilt.
+3. **Transkription** mit OpenAI `gpt-4o-transcribe`, danach bessert Claude jedes Stück nach:
+   Erkennungsfehler, Zeichensetzung, Absätze, Füllwörter. Der Originaltext bleibt unter „Original-Erkennung“ abrufbar.
+4. **Zusammenfassung** über *alle* Aufnahmen des Ordners: Kurzfassung, Stichpunkte nach Themen,
+   To-dos (mit „wer“ und „bis wann“), Entscheidungen, offene Fragen.
+5. **To-dos**: abhaken oder mit dem Pfeil (einzeln) bzw. „Alle offenen senden“ in den Aufgabenplaner schicken.
+   Die Spalte (Heute / Prozess / Privat) wählst du in den Einstellungen. Alternativ: Apple Erinnerungen
+   über einen Kurzbefehl, Things, Todoist oder das Teilen-Menü.
+6. **Export** – kopieren, teilen oder als Markdown-Datei speichern.
 
-Alles (Audio, Texte, Schlüssel) wird nur **lokal im Browser** gespeichert (IndexedDB/localStorage).
+## Sicherheit
 
-## Einrichtung
+- **Passwort-Login**: Ohne `APP_PASSWORD` kommt niemand an die Server-Funktionen (Transkription, Claude, Aufgabenplaner).
+  Die Anmeldung ist ein signiertes, `HttpOnly`-/`Secure`-/`SameSite=Strict`-Cookie (30 Tage). Falsche Passwörter werden ausgebremst.
+- **Keine Schlüssel auf dem Handy oder im Code**: OpenAI-, Anthropic- und Supabase-Schlüssel liegen nur in den
+  Umgebungsvariablen bei Vercel.
+- **Aufnahmen bleiben auf deinem Gerät** (IndexedDB im Browser). Zum Transkribieren geht ein Audio-Stück einmal durch
+  die Vercel-Funktion an OpenAI und wird dabei nirgends gespeichert. In der Datenbank landen nur die To-dos, die du abschickst.
+- Strenge Sicherheits-Header (Content-Security-Policy, kein Einbetten in fremde Seiten, `noindex`).
 
-In den Einstellungen (Zahnrad):
+## Einrichtung auf Vercel
 
-- **OpenAI-API-Schlüssel** für die Transkription – https://platform.openai.com/api-keys
-- **Anthropic-API-Schlüssel** für Nachbessern und Zusammenfassung – https://console.anthropic.com/settings/keys
-- **Fachbegriffe / Namen** (unter „Erweitert“) – verbessert die Erkennung spürbar, z. B. Firmennamen, Produkte, Personen.
+1. Auf [vercel.com](https://vercel.com) mit GitHub anmelden → **Add New… → Project** → Repo `Plaude-auf-Temu` importieren
+   (Framework: *Other*, keine Build-Einstellungen nötig).
+2. Unter **Settings → Environment Variables** eintragen:
 
-### To-dos in die To-do-App
+   | Name | Wert |
+   |---|---|
+   | `APP_PASSWORD` | Dein Passwort für die App – lang und eindeutig wählen |
+   | `OPENAI_API_KEY` | https://platform.openai.com/api-keys |
+   | `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys |
+   | `SUPABASE_URL` | Dieselbe wie im Aufgabenplaner (`https://xxxx.supabase.co`) |
+   | `SUPABASE_ANON_KEY` | Derselbe anon key wie im Aufgabenplaner |
 
-| Einstellung | Was passiert |
-|---|---|
-| **Apple Erinnerungen (Kurzbefehl)** | Öffnet den Kurzbefehl „Plaude To-do“ mit den Aufgaben (eine pro Zeile). |
-| **Things** | Legt die Aufgaben direkt in Things an. |
-| **Todoist** | Legt eine Aufgabe in Todoist an (mehrere über das Teilen-Menü). |
-| **Teilen-Menü** | Öffnet das System-Teilen-Menü – damit geht jede andere App. |
-
-**Kurzbefehl für Apple Erinnerungen einmalig anlegen** (Kurzbefehle-App → „+“):
-
-1. Aktion **„Text teilen“** → Eingabe: *Kurzbefehleingabe*, teilen nach *Neue Zeilen*
-2. Aktion **„Wiederholen mit jedem“** (für die geteilten Texte)
-3. Darin Aktion **„Erinnerung hinzufügen“** → Text: *Wiederholungsobjekt* (Liste nach Wunsch wählen)
-4. Kurzbefehl **„Plaude To-do“** nennen (oder den Namen in den Einstellungen anpassen).
-
-## Aufs Handy bringen
-
-Mikrofon-Zugriff gibt es im Browser nur über **HTTPS**. Am einfachsten über GitHub Pages:
-*Settings → Pages → Deploy from a branch → `main` / `(root)`*. Danach die Seite in Safari öffnen,
-dann **Teilen → Zum Home-Bildschirm** – so startet sie wie eine App.
+   Optional: `CLAUDE_MODEL` (Standard `claude-opus-5-5`), `OPENAI_TRANSCRIBE_MODEL` (Standard `gpt-4o-transcribe`),
+   `SESSION_SECRET` (beliebige lange Zeichenfolge; ändern meldet alle Geräte ab).
+3. **Deploy** (bzw. nach dem Eintragen der Variablen einmal *Redeploy*).
+4. Die Vercel-Adresse in Safari öffnen → anmelden → **Teilen → Zum Home-Bildschirm**.
 
 Hinweis iPhone: Während der Aufnahme den Bildschirm anlassen (die App versucht das automatisch).
-Wird das Handy gesperrt, stoppt Safari das Mikrofon. Alles bis dahin Aufgenommene bleibt aber gespeichert.
-
-Lokal testen: `python3 -m http.server 8000` → http://localhost:8000
+Wird das Handy gesperrt, stoppt Safari das Mikrofon. Alles bis dahin Aufgenommene bleibt gespeichert.
+Hochgeladene Audiodateien dürfen höchstens 4 MB groß sein (Grenze von Vercel). Längeres lieber direkt in der App aufnehmen.
 
 ## Dateien
 
 ```
-index.html               Oberfläche
-app.js                   Aufnahme, Speicher, Transkription, Claude, To-do-Versand
-app.css                  Gestaltung (hell/dunkel)
-vendor/anthropic-sdk.js  Offizielles Anthropic-JS-SDK (@anthropic-ai/sdk 0.131.0), lokal gebündelt
-manifest.webmanifest, icon*.png, icon.svg   Home-Bildschirm-App
+index.html, app.js, app.css   Oberfläche (Aufnahme, Speicher, Ansichten)
+api/session.js                Anmelden / Abmelden / Status
+api/transcribe.js             Audio-Stück → OpenAI → Text
+api/claude.js                 Nachbessern + Zusammenfassung (Claude, Anweisungen liegen hier)
+api/todo.js                   To-dos in den Aufgabenplaner (Supabase "tasks")
+lib/server.js                 Login-Cookie, Hilfsfunktionen
+vercel.json                   Laufzeit + Sicherheits-Header
 ```
 
 ## Kosten (ungefähr)
 
 - Transkription `gpt-4o-transcribe`: ca. 0,6 US-Cent pro Minute Audio.
-- Claude (Nachbessern + Zusammenfassung) mit `claude-opus-5-5`: je nach Länge wenige Cent pro Ordner.
-  In den Einstellungen kann man ein günstigeres Modell eintragen (z. B. `claude-sonnet-5-5`)
-  oder das Nachbessern abschalten.
+- Claude (`claude-opus-5-5`): je nach Länge wenige Cent pro Ordner. Günstiger: `CLAUDE_MODEL=claude-sonnet-5-5`
+  setzen oder das Nachbessern in den Einstellungen abschalten.
+- Vercel Hobby (kostenlos) reicht für den persönlichen Gebrauch.

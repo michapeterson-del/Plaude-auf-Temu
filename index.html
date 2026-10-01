@@ -32,23 +32,24 @@
   <dialog id="settings">
     <form method="dialog" id="settings-form">
       <h2>Einstellungen</h2>
-      <p class="hint">Die Schlüssel bleiben nur auf diesem Gerät gespeichert und werden direkt an OpenAI bzw. Anthropic geschickt.</p>
-
-      <label>OpenAI-API-Schlüssel <small>(Transkription)</small>
-        <input type="password" name="openaiKey" autocomplete="off" placeholder="sk-…">
-      </label>
-      <label>Anthropic-API-Schlüssel <small>(Zusammenfassung &amp; Nachbessern)</small>
-        <input type="password" name="anthropicKey" autocomplete="off" placeholder="sk-ant-…">
-      </label>
-
       <label>To-dos senden an
         <select name="todoApp">
+          <option value="aufgabenplaner">Mein Aufgabenplaner</option>
           <option value="shortcut">Apple Erinnerungen (über Kurzbefehl)</option>
           <option value="things">Things</option>
           <option value="todoist">Todoist</option>
           <option value="share">Teilen-Menü (jede andere App)</option>
         </select>
       </label>
+      <div class="planner-only">
+        <label>Spalte im Aufgabenplaner
+          <select name="todoCategory">
+            <option value="today">☀️ Heute</option>
+            <option value="process">🔁 Prozess/Optimierung</option>
+            <option value="private">🔒 Privat</option>
+          </select>
+        </label>
+      </div>
       <div class="shortcut-only">
         <label>Name des Kurzbefehls
           <input type="text" name="shortcutName" placeholder="Plaude To-do">
@@ -58,28 +59,18 @@
 
       <details>
         <summary>Erweitert</summary>
-        <label>Transkriptions-Modell
-          <input type="text" name="sttModel" list="stt-models">
-          <datalist id="stt-models">
-            <option value="gpt-4o-transcribe">
-            <option value="gpt-4o-mini-transcribe">
-            <option value="whisper-1">
-          </datalist>
-        </label>
         <label>Sprache (ISO-Code)
           <input type="text" name="language" placeholder="de" maxlength="5">
         </label>
         <label>Fachbegriffe / Namen <small>(hilft der Erkennung, kommagetrennt)</small>
           <textarea name="vocabulary" rows="2" placeholder="z. B. Wallbox, Zählerschrank, Herr Linge"></textarea>
         </label>
-        <label>Claude-Modell
-          <input type="text" name="claudeModel">
-        </label>
         <label class="check"><input type="checkbox" name="polish"> Transkript mit Claude nachbessern (Erkennungsfehler, Satzzeichen, Absätze)</label>
         <label class="check"><input type="checkbox" name="autoSummary"> Zusammenfassung automatisch aktualisieren</label>
       </details>
 
-      <div class="row end">
+      <div class="row between">
+        <button type="button" class="link" id="logout">Abmelden</button>
         <button type="submit" class="btn primary">Speichern</button>
       </div>
     </form>

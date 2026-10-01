@@ -2,15 +2,12 @@
    Einstellungen
    ============================================================ */
 const DEFAULTS = {
-  openaiKey: "",
-  anthropicKey: "",
-  sttModel: "gpt-4o-transcribe",
   language: "de",
   vocabulary: "",
-  claudeModel: "claude-opus-5-5",
   polish: true,
   autoSummary: true,
-  todoApp: "shortcut",
+  todoApp: "aufgabenplaner",
+  todoCategory: "today",
   shortcutName: "Plaude To-do",
 };
 
@@ -140,11 +137,11 @@ function extFor(mime) {
 }
 
 /* ============================================================
-   Aufnahme – wird alle 8 Minuten in eigenständige Teile
+   Aufnahme – wird alle 4 Minuten in eigenständige Teile
    geschnitten, die sofort gespeichert werden (kein Datenverlust,
    und jedes Stück passt sicher in die Transkriptions-API).
    ============================================================ */
-const SEGMENT_MS = 8 * 60 * 1000;
+const SEGMENT_MS = 4 * 60 * 1000; // ~2 MB pro Stück – passt sicher durch den Server
 
 function pickMime() {
   const candidates = ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus", "audio/webm"];
@@ -288,41 +285,41 @@ window.addEventListener("beforeunload", (e) => {
 });
 
 /* ============================================================
-   Transkription (OpenAI)
+   Server-Aufrufe (Schlüssel liegen nur auf dem Server)
    ============================================================ */
-const MAX_UPLOAD = 25 * 1024 * 1024;
+const MAX_UPLOAD = 4.3 * 1024 * 1024; // Grenze für eine Anfrage an Vercel
+
+class AuthError extends Error {}
+
+async function api(path, { method = "POST", body, form } = {}) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method,
+      credentials: "same-origin",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: form ?? (body ? JSON.stringify(body) : undefined),
+    });
+  } catch {
+    throw new Error("Keine Verbindung zum Server.");
+  }
+  let data = {};
+  try { data = await res.json(); } catch { /* keine JSON-Antwort */ }
+  if (res.status === 401 && path !== "/api/session") {
+    showLogin();
+    throw new AuthError("Bitte neu anmelden.");
+  }
+  if (!res.ok) throw new Error(data.error || `Serverfehler (${res.status})`);
+  return data;
+}
 
 async function transcribeBlob(blob, { prompt, filename }) {
-  if (!settings.openaiKey) throw new Error("Kein OpenAI-Schlüssel hinterlegt (Einstellungen).");
-  if (blob.size > MAX_UPLOAD) throw new Error("Audio-Stück ist größer als 25 MB.");
-  const fd = new FormData();
-  fd.append("file", blob, filename);
-  fd.append("model", settings.sttModel || DEFAULTS.sttModel);
-  if (settings.language) fd.append("language", settings.language);
-  if (prompt) fd.append("prompt", prompt);
-  fd.append("response_format", "json");
-
-  let lastErr;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${settings.openaiKey}` },
-        body: fd,
-      });
-      if (res.ok) return ((await res.json()).text || "").trim();
-      const body = await res.text();
-      let msg = body;
-      try { msg = JSON.parse(body).error?.message || body; } catch { /* Text lassen */ }
-      lastErr = new Error(`OpenAI (${res.status}): ${msg}`);
-      if (res.status < 500 && res.status !== 429) throw lastErr;
-    } catch (err) {
-      lastErr = err;
-      if (String(err.message).startsWith("OpenAI (4") && !String(err.message).startsWith("OpenAI (429")) throw err;
-    }
-    await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
-  }
-  throw lastErr;
+  if (blob.size > MAX_UPLOAD) throw new Error("Audio-Stück ist zu groß (max. 4 MB).");
+  const form = new FormData();
+  form.append("file", blob, filename);
+  if (settings.language) form.append("language", settings.language);
+  if (prompt) form.append("prompt", prompt);
+  return (await api("/api/transcribe", { form })).text || "";
 }
 
 function sttPrompt(folderName, previousText) {
@@ -334,114 +331,28 @@ function sttPrompt(folderName, previousText) {
   return parts.join(" ");
 }
 
-/* ============================================================
-   Claude: Nachbessern + Zusammenfassen
-   ============================================================ */
-// Offizielles Anthropic-SDK, lokal gebündelt (vendor/), erst bei Bedarf geladen
-async function claudeClient() {
-  if (!settings.anthropicKey) throw new Error("Kein Anthropic-Schlüssel hinterlegt (Einstellungen).");
-  const { default: Anthropic } = await import("./vendor/anthropic-sdk.js");
-  return new Anthropic({ apiKey: settings.anthropicKey, dangerouslyAllowBrowser: true });
-}
-
-async function askClaude({ system, user, effort, schema }) {
-  const client = await claudeClient();
-  const outputConfig = { effort };
-  if (schema) outputConfig.format = { type: "json_schema", schema };
-  const stream = client.beta.messages.stream({
-    model: settings.claudeModel || DEFAULTS.claudeModel,
-    max_tokens: 64000,
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
-    output_config: outputConfig,
-    system,
-    messages: [{ role: "user", content: user }],
+async function polishText(text, folderName, previous) {
+  const data = await api("/api/claude", {
+    body: { kind: "polish", text, previous: previous?.slice(-1500) || "", folderName, vocabulary: settings.vocabulary },
   });
-  const msg = await stream.finalMessage();
-  if (msg.stop_reason === "refusal") {
-    throw new Error(`Claude hat die Anfrage abgelehnt${msg.stop_details?.explanation ? `: ${msg.stop_details.explanation}` : "."}`);
-  }
-  if (msg.stop_reason === "max_tokens") throw new Error("Antwort von Claude war zu lang und wurde abgeschnitten.");
-  return msg.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+  return data.text || text;
 }
-
-const POLISH_SYSTEM = `Du bekommst die automatische Transkription einer deutschen Sprachaufnahme.
-Bessere sie behutsam nach:
-- Offensichtliche Erkennungsfehler korrigieren (falsch verstandene Wörter, Namen, Fachbegriffe), wenn der Zusammenhang eindeutig ist.
-- Rechtschreibung, Groß-/Kleinschreibung und Zeichensetzung korrigieren.
-- Sinnvolle Absätze bilden. Erkennbare Sprecherwechsel als neuen Absatz setzen.
-- Reine Füllwörter („äh“, „ähm“) und versehentliche Wortwiederholungen entfernen.
-Wichtig: Inhalt, Reihenfolge und Wortwahl bleiben erhalten. Nichts zusammenfassen, nichts weglassen, nichts hinzuerfinden. Unklare Stellen unverändert lassen.
-Gib ausschließlich den überarbeiteten Text zurück, ohne Einleitung oder Kommentar.`;
-
-async function polishTranscript(text, folderName) {
-  const vocab = settings.vocabulary.trim() ? `\nBekannte Begriffe und Namen: ${settings.vocabulary.trim()}` : "";
-  return askClaude({
-    system: POLISH_SYSTEM,
-    effort: "medium",
-    user: `Thema der Aufnahme: ${folderName}${vocab}\n\n<transkript>\n${text}\n</transkript>`,
-  });
-}
-
-const SUMMARY_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["kurzfassung", "stichpunkte", "todos", "entscheidungen", "offene_fragen"],
-  properties: {
-    kurzfassung: { type: "string", description: "2–5 Sätze: worum ging es, was ist das Ergebnis." },
-    stichpunkte: {
-      type: "array",
-      description: "Die wichtigsten Inhalte, nach Themen gruppiert.",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["thema", "punkte"],
-        properties: {
-          thema: { type: "string" },
-          punkte: { type: "array", items: { type: "string" } },
-        },
-      },
-    },
-    todos: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["aufgabe", "wer", "bis"],
-        properties: {
-          aufgabe: { type: "string", description: "Konkrete Aufgabe, mit Verb formuliert." },
-          wer: { type: "string", description: "Zuständige Person, leer wenn nicht genannt." },
-          bis: { type: "string", description: "Frist/Zeitpunkt wie genannt, leer wenn nicht genannt." },
-        },
-      },
-    },
-    entscheidungen: { type: "array", items: { type: "string" } },
-    offene_fragen: { type: "array", items: { type: "string" } },
-  },
-};
-
-const SUMMARY_SYSTEM = `Du fasst Sprachaufnahmen (Gespräche, Notizen, Besprechungen) auf Deutsch zusammen.
-Alle Aufnahmen gehören zu einem Ordner und werden gemeinsam als ein Vorgang ausgewertet.
-- Kurzfassung: knapp und konkret.
-- Stichpunkte: nach Themen gruppiert, kurze Stichpunkte statt ganzer Sätze; Zahlen, Mengen, Preise, Termine und Namen genau übernehmen.
-- To-dos: jede Aufgabe, Besorgung oder Zusage, die aus den Aufnahmen hervorgeht (auch Einkaufslisten-Punkte einzeln). „wer“ und „bis“ nur füllen, wenn es gesagt wurde.
-- Entscheidungen und offene Fragen nur, wenn es welche gibt (sonst leere Liste).
-Erfinde nichts, was nicht in den Aufnahmen vorkommt.`;
 
 async function summarizeFolder(folderId) {
   const folder = await store.folder(folderId);
   const recs = (await store.recordings(folderId)).filter((r) => r.status === "fertig" && r.transcript.trim());
   if (!recs.length) throw new Error("Noch keine fertigen Transkripte in diesem Ordner.");
-  const body = recs
-    .map((r, i) => `<aufnahme nr="${i + 1}" zeit="${new Date(r.createdAt).toLocaleString("de-DE")}" dauer="${fmtDuration(r.duration)}">\n${r.transcript}\n</aufnahme>`)
-    .join("\n\n");
-  const text = await askClaude({
-    system: SUMMARY_SYSTEM,
-    effort: "high",
-    schema: SUMMARY_SCHEMA,
-    user: `Ordner: ${folder.name}\n\n${body}`,
+  const { summary } = await api("/api/claude", {
+    body: {
+      kind: "summary",
+      folderName: folder.name,
+      recordings: recs.map((r) => ({
+        time: new Date(r.createdAt).toLocaleString("de-DE"),
+        duration: fmtDuration(r.duration),
+        text: r.transcript,
+      })),
+    },
   });
-  const summary = JSON.parse(text);
   await updateFolder(folderId, { summary, summaryAt: Date.now(), summaryStale: false, summaryError: null });
 }
 
@@ -458,28 +369,40 @@ function processRecording(id) {
     const folder = await store.folder(r.folderId);
     if (!folder) return;
     try {
-      if (!r.rawTranscript) {
-        await updateRecording(id, { status: "transkribiere", error: null, progress: "" });
-        render();
-        const texts = [];
-        for (const [i, seg] of r.segments.entries()) {
-          if (r.segments.length > 1) {
-            await updateRecording(id, { progress: `Teil ${i + 1}/${r.segments.length}` });
-            render();
-          }
+      // Pro Stück: Text erkennen, dann nachbessern. Zwischenstände werden gespeichert,
+      // damit nach einem Fehler oder Neuladen nichts doppelt gemacht wird.
+      const parts = r.parts ? [...r.parts] : [];
+      const total = r.segments.length;
+      const label = (i) => (total > 1 ? `Teil ${i + 1}/${total}` : "");
+      for (const [i, seg] of r.segments.entries()) {
+        parts[i] ??= {};
+        if (parts[i].raw == null) {
+          await updateRecording(id, { status: "transkribiere", error: null, progress: label(i) });
+          render();
           const name = seg.name || `aufnahme-${i + 1}.${extFor(seg.mime || seg.blob.type)}`;
-          texts.push(await transcribeBlob(seg.blob, { prompt: sttPrompt(folder.name, texts.at(-1)), filename: name }));
+          parts[i].raw = await transcribeBlob(seg.blob, { prompt: sttPrompt(folder.name, parts[i - 1]?.raw), filename: name });
+          await updateRecording(id, { parts });
         }
-        const raw = texts.join("\n\n").trim();
-        r = await updateRecording(id, { rawTranscript: raw, transcript: raw, progress: "" });
+        if (settings.polish && parts[i].polished == null && parts[i].raw.trim()) {
+          await updateRecording(id, { status: "bessere", progress: label(i) });
+          render();
+          parts[i].polished = await polishText(parts[i].raw, folder.name, parts[i - 1]?.polished ?? parts[i - 1]?.raw);
+          await updateRecording(id, { parts });
+        }
       }
-      if (settings.polish && settings.anthropicKey && !r.polished && r.rawTranscript) {
-        await updateRecording(id, { status: "bessere" });
-        render();
-        const polished = await polishTranscript(r.rawTranscript, folder.name);
-        r = await updateRecording(id, { transcript: polished || r.rawTranscript, polished: true });
-      }
-      await updateRecording(id, { status: "fertig", error: null });
+      const raw = parts.map((p) => p.raw).join("\n\n").trim();
+      const polishedAll = parts.every((p) => p.polished != null || !p.raw.trim());
+      const transcript = settings.polish && polishedAll
+        ? parts.map((p) => p.polished ?? p.raw).join("\n\n").trim()
+        : raw;
+      r = await updateRecording(id, {
+        rawTranscript: raw,
+        transcript,
+        polished: settings.polish && polishedAll,
+        status: "fertig",
+        error: null,
+        progress: "",
+      });
       await updateFolder(r.folderId, { summaryStale: true, updatedAt: Date.now() });
       render();
       maybeAutoSummarize(r.folderId);
@@ -510,7 +433,7 @@ function runSummary(folderId) {
 }
 
 async function maybeAutoSummarize(folderId) {
-  if (!settings.autoSummary || !settings.anthropicKey) return;
+  if (!settings.autoSummary) return;
   if (activeRecorder?.folderId === folderId) return;
   const recs = await store.recordings(folderId);
   const busy = recs.some((r) => ["neu", "transkribiere", "bessere", "aufnahme"].includes(r.status));
@@ -523,7 +446,7 @@ async function maybeAutoSummarize(folderId) {
 async function importFiles(folderId, files) {
   for (const file of files) {
     if (file.size > MAX_UPLOAD) {
-      toast(`„${file.name}“ ist größer als 25 MB – bitte kürzer aufnehmen oder teilen.`, 5000);
+      toast(`„${file.name}“ ist größer als 4 MB – bitte direkt in der App aufnehmen (wird automatisch geteilt).`, 6000);
       continue;
     }
     const duration = await probeDuration(file);
@@ -572,6 +495,24 @@ async function sendTodos(todos, folderName) {
   const enc = encodeURIComponent;
   let url;
   switch (app) {
+    case "aufgabenplaner": {
+      try {
+        const { count } = await api("/api/todo", {
+          body: {
+            category: settings.todoCategory,
+            tasks: todos.map((t) => ({
+              title: t.aufgabe,
+              description: [t.wer && `Wer: ${t.wer}`, t.bis && `Bis: ${t.bis}`, `Aus Aufnahme: ${folderName}`].filter(Boolean).join("\n"),
+            })),
+          },
+        });
+        toast(count === 1 ? "Im Aufgabenplaner angelegt." : `${count} Aufgaben im Aufgabenplaner angelegt.`);
+        return true;
+      } catch (err) {
+        if (!(err instanceof AuthError)) toast(err.message, 5000);
+        return false;
+      }
+    }
     case "shortcut":
       url = `shortcuts://run-shortcut?name=${enc(settings.shortcutName || DEFAULTS.shortcutName)}&input=text&text=${enc(text)}`;
       break;
@@ -672,6 +613,7 @@ function parseRoute() {
 }
 
 async function render() {
+  if (!loggedIn) return;
   const token = ++renderToken;
   const html = route.name === "folder" ? await renderFolder(route.id) : await renderHome();
   if (token !== renderToken || html == null) return;
@@ -701,8 +643,8 @@ async function renderHome() {
     if (["transkribiere", "bessere", "neu", "aufnahme"].includes(r.status)) busy[r.folderId] = true;
   }
 
-  const setupHint = !settings.openaiKey
-    ? `<button class="notice" data-action="settings">Zuerst in den <b>Einstellungen</b> die API-Schlüssel eintragen.</button>`
+  const setupHint = settings.todoApp === "aufgabenplaner" && serverFeatures && !serverFeatures.aufgabenplaner
+    ? `<button class="notice" data-action="settings">Der Aufgabenplaner ist auf dem Server noch nicht eingerichtet (SUPABASE_URL / SUPABASE_ANON_KEY) – oder in den <b>Einstellungen</b> eine andere To-do-App wählen.</button>`
     : "";
 
   let groups = "";
@@ -1073,7 +1015,9 @@ $("#open-settings").addEventListener("click", openSettings);
 function updateTodoAppHint() {
   const v = form.elements.todoApp.value;
   form.querySelector(".shortcut-only").hidden = v !== "shortcut";
+  form.querySelector(".planner-only").hidden = v !== "aufgabenplaner";
 }
+$("#logout").addEventListener("click", logout);
 form.elements.todoApp.addEventListener("change", updateTodoAppHint);
 form.addEventListener("submit", () => {
   const next = { ...settings };
@@ -1082,8 +1026,6 @@ form.addEventListener("submit", () => {
     if (!el) continue;
     next[k] = el.type === "checkbox" ? el.checked : el.value.trim();
   }
-  next.sttModel ||= DEFAULTS.sttModel;
-  next.claudeModel ||= DEFAULTS.claudeModel;
   settings = next;
   saveSettings(settings);
   toast("Gespeichert.");
@@ -1100,13 +1042,80 @@ async function resumePending() {
       if (r.segments.length) await updateRecording(r.id, { status: "neu", duration: r.duration || r.segments.length * SEGMENT_MS / 1000 });
       else { await store.deleteRecording(r.id); continue; }
     }
-    if (["neu", "transkribiere", "bessere"].includes(r.status) && settings.openaiKey) processRecording(r.id);
+    if (["neu", "transkribiere", "bessere"].includes(r.status)) processRecording(r.id);
   }
 }
 
 /* Speicher dauerhaft anfordern, damit der Browser nichts wegräumt */
 navigator.storage?.persist?.().catch(() => {});
 
-parseRoute();
-resumePending().then(render);
-if (!settings.openaiKey) setTimeout(openSettings, 300);
+/* ============================================================
+   Anmeldung
+   ============================================================ */
+let serverFeatures = null;
+let loggedIn = false;
+
+function showLogin(message = "") {
+  loggedIn = false;
+  $("#title").textContent = "Plaude";
+  $("#back").hidden = true;
+  $("#open-settings").hidden = true;
+  view.innerHTML = `
+    <form class="card login" data-form="login">
+      <h2>Anmelden</h2>
+      <p class="hint">Deine Aufnahmen bleiben auf diesem Gerät. Das Passwort schützt die Transkription und deinen Aufgabenplaner.</p>
+      <input type="password" name="password" placeholder="Passwort" autocomplete="current-password" required>
+      ${message ? `<p class="error">${esc(message)}</p>` : ""}
+      <button class="btn primary" type="submit">Anmelden</button>
+    </form>`;
+  view.querySelector("input").focus();
+}
+
+async function onLoggedIn(data) {
+  loggedIn = true;
+  serverFeatures = data.features || {};
+  $("#open-settings").hidden = false;
+  parseRoute();
+  await render();
+  resumePending();
+}
+
+view.addEventListener("submit", async (e) => {
+  const form = e.target.closest('form[data-form="login"]');
+  if (!form) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  const btn = form.querySelector("button");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/session", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: form.password.value }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { showLogin(data.error || "Anmeldung fehlgeschlagen."); return; }
+    form.password.blur();
+    await onLoggedIn(data);
+  } catch {
+    showLogin("Keine Verbindung zum Server.");
+  }
+}, true);
+
+async function logout() {
+  await fetch("/api/session", { method: "DELETE", credentials: "same-origin" }).catch(() => {});
+  dlg.close();
+  showLogin();
+}
+
+(async () => {
+  try {
+    const res = await fetch("/api/session", { credentials: "same-origin" });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) return onLoggedIn(data);
+    showLogin(res.status === 401 ? "" : data.error || "Server nicht erreichbar.");
+  } catch {
+    showLogin("Server nicht erreichbar.");
+  }
+})();
