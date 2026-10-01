@@ -154,10 +154,10 @@ const MIC_CONSTRAINTS = {
 };
 
 class Recorder {
-  constructor(recordingId, onSegment) {
+  constructor(recordingId, onSegment, startIndex = 0) {
     this.recordingId = recordingId;
     this.onSegment = onSegment;
-    this.segmentIndex = 0;
+    this.segmentIndex = startIndex;
     this.pending = [];
     this.interruptions = 0;
     this.stopped = false;
@@ -183,6 +183,10 @@ class Recorder {
     const track = this.stream.getAudioTracks()[0];
     // iOS beendet das Mikrofon, wenn man die App verlässt: dann das bisherige Stück sichern
     track.addEventListener("ended", () => this._flush());
+    // iOS schaltet das Mikrofon im Hintergrund stumm und beim Zurückkommen wieder ein
+    track.addEventListener("unmute", () => {
+      if (!this.stopped && this.current?.state !== "recording" && document.visibilityState === "visible") this._startSegment();
+    });
     this._setupMeter();
     this._lockScreen();
   }
@@ -192,6 +196,10 @@ class Recorder {
   }
 
   _startSegment() {
+    try { this._startSegmentUnsafe(); } catch (err) { console.warn("Neues Stück nicht möglich", err); }
+  }
+
+  _startSegmentUnsafe() {
     const opts = { audioBitsPerSecond: 64000 };
     if (this.mime) opts.mimeType = this.mime;
     const rec = new MediaRecorder(this.stream, opts);
@@ -229,32 +237,54 @@ class Recorder {
     }
   }
 
-  /** Nach dem Zurückkehren in die App: Mikrofon wieder öffnen und weiter aufnehmen. */
-  async recover() {
+  /** Nach dem Zurückkehren in die App: Mikrofon wieder öffnen und weiter aufnehmen.
+      byTap = true, wenn der Nutzer auf "Weiter aufnehmen" getippt hat (iOS verlangt das manchmal). */
+  async recover(byTap = false) {
     if (this.stopped || this.recovering) return;
-    const track = this.stream?.getAudioTracks()[0];
-    const alive = track && track.readyState === "live" && !track.muted && this.current?.state === "recording";
-    if (alive) {
-      this.audioCtx?.resume?.();
-      if (!this.wakeLock || this.wakeLock.released) this._lockScreen();
-      return;
-    }
     this.recovering = true;
     try {
+      let track = this.stream?.getAudioTracks()[0];
+      // Kurz warten: iOS schaltet das Mikrofon oft erst einen Moment nach dem Zurückkommen wieder ein
+      for (let i = 0; i < 10 && track?.readyState === "live" && track.muted; i++) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      if (track?.readyState === "live" && !track.muted) {
+        if (this.current?.state !== "recording") { this.interruptions++; this._startSegment(); }
+        this.audioCtx?.resume?.();
+        if (!this.wakeLock || this.wakeLock.released) this._lockScreen();
+        this.needsTap = false;
+        return;
+      }
+      // Mikrofon ist weg: neu öffnen
       this._flush();
       this.stream?.getTracks().forEach((t) => t.stop());
-      this.audioCtx?.close();
+      this._closeMeter();
       this.analyser = null;
-      await this._openMic();
+      try {
+        await this._openMic();
+      } catch {
+        // Ohne Tipp lässt iOS das Mikrofon manchmal nicht wieder an → Knopf anzeigen
+        this.needsTap = true;
+        render();
+        if (byTap) toast("Mikrofon lässt sich nicht öffnen – bitte Aufnahme beenden und neu starten.", 6000);
+        return;
+      }
       if (this.stopped) { this.stream.getTracks().forEach((t) => t.stop()); return; }
       this.interruptions++;
+      this.needsTap = false;
       this._startSegment();
       toast("Aufnahme läuft weiter.");
-    } catch {
-      toast("Mikrofon konnte nicht wieder geöffnet werden – bitte Aufnahme beenden und neu starten.", 6000);
+      render();
     } finally {
       this.recovering = false;
     }
+  }
+
+  _closeMeter() {
+    const ctx = this.audioCtx;
+    this.audioCtx = null;
+    this.analyser = null;
+    if (ctx && ctx.state !== "closed") ctx.close().catch(() => {});
   }
 
   _setupMeter() {
@@ -286,56 +316,66 @@ class Recorder {
     this._flush();
     await Promise.all(this.pending);
     this.stream?.getTracks().forEach((t) => t.stop());
-    this.audioCtx?.close();
+    this._closeMeter();
     try { await this.wakeLock?.release(); } catch { /* egal */ }
   }
 }
 
 let activeRecorder = null; // { recorder, folderId, recordingId }
 
-async function startRecording(folderId) {
+async function startRecording(folderId, continueId = null) {
   if (activeRecorder) return;
-  if (!pickMime() && pickMime() !== "") {
+  if (!window.MediaRecorder) {
     toast("Dieser Browser kann leider nicht aufnehmen.");
     return;
   }
-  const rec = {
-    id: uid(),
-    folderId,
-    createdAt: Date.now(),
-    source: "aufnahme",
-    status: "aufnahme",
-    segments: [],
-    duration: 0,
-    transcript: "",
-    rawTranscript: "",
-  };
-  await store.putRecording(rec);
+  let rec = continueId ? await store.recording(continueId) : null;
+  if (!rec) {
+    rec = {
+      id: uid(),
+      folderId,
+      createdAt: Date.now(),
+      source: "aufnahme",
+      status: "aufnahme",
+      segments: [],
+      duration: 0,
+      transcript: "",
+      rawTranscript: "",
+    };
+    await store.putRecording(rec);
+  }
+  const baseDuration = continueId ? rec.duration || 0 : 0;
+  const startIndex = rec.segments.reduce((m, sg) => Math.max(m, sg.index + 1), 0);
 
   const recorder = new Recorder(rec.id, async (index, blob) => {
     await updateRecording(rec.id, (r) => {
       const segments = [...r.segments, { index, blob, mime: blob.type }].sort((a, b) => a.index - b.index);
-      return { segments };
+      // Dauer laufend mitspeichern, falls iOS die App im Hintergrund beendet
+      return { segments, duration: baseDuration + recorder.elapsed(), interruptions: (continueId ? rec.interruptions || 0 : 0) + recorder.interruptions };
     });
-  });
+  }, startIndex);
   try {
     await recorder.start();
   } catch (err) {
-    await store.deleteRecording(rec.id);
+    if (!continueId) await store.deleteRecording(rec.id);
     toast(err.name === "NotAllowedError" ? "Mikrofon-Zugriff wurde nicht erlaubt." : "Mikrofon konnte nicht gestartet werden.");
     return;
   }
-  activeRecorder = { recorder, folderId, recordingId: rec.id };
+  if (continueId) {
+    recorder.interruptions = 1;
+    await updateRecording(rec.id, { status: "aufnahme" });
+  }
+  activeRecorder = { recorder, folderId, recordingId: rec.id, baseDuration, baseInterruptions: continueId ? rec.interruptions || 0 : 0 };
   render();
 }
 
 async function stopRecording() {
   if (!activeRecorder) return;
-  const { recorder, folderId, recordingId } = activeRecorder;
-  const duration = recorder.elapsed();
+  const { recorder, folderId, recordingId, baseDuration, baseInterruptions } = activeRecorder;
+  const duration = baseDuration + recorder.elapsed();
   activeRecorder = null;
   await recorder.stop();
-  const r = await updateRecording(recordingId, { status: "neu", duration, interruptions: recorder.interruptions });
+  const r = await updateRecording(recordingId, { status: "neu", duration, interruptions: baseInterruptions + recorder.interruptions });
   if (!r || !r.segments.length) {
     await store.deleteRecording(recordingId);
     toast("Die Aufnahme war leer.");
@@ -431,7 +471,7 @@ const enqueue = (fn) => (queue = queue.then(fn, fn).catch(() => {}));
 function processRecording(id) {
   enqueue(async () => {
     let r = await store.recording(id);
-    if (!r || r.status === "aufnahme") return;
+    if (!r || r.status === "aufnahme" || r.status === "pausiert") return;
     const folder = await store.folder(r.folderId);
     if (!folder) return;
     try {
@@ -502,7 +542,7 @@ async function maybeAutoSummarize(folderId) {
   if (!settings.autoSummary) return;
   if (activeRecorder?.folderId === folderId) return;
   const recs = await store.recordings(folderId);
-  const busy = recs.some((r) => ["neu", "transkribiere", "bessere", "aufnahme"].includes(r.status));
+  const busy = recs.some((r) => ["neu", "transkribiere", "bessere", "aufnahme", "pausiert"].includes(r.status));
   if (!busy) runSummary(folderId);
 }
 
@@ -778,9 +818,11 @@ async function renderHome() {
   folders.sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
   const counts = {};
   const busy = {};
+  const paused = {};
   for (const r of recs) {
     counts[r.folderId] = (counts[r.folderId] || 0) + 1;
     if (["transkribiere", "bessere", "neu", "aufnahme"].includes(r.status)) busy[r.folderId] = true;
+    if (r.status === "pausiert") paused[r.folderId] = true;
   }
 
   const setupHint = settings.todoApp === "aufgabenplaner" && serverFeatures && !serverFeatures.aufgabenplaner
@@ -802,7 +844,7 @@ async function renderHome() {
           <span class="folder-meta">${counts[f.id] || 0} Aufnahme${counts[f.id] === 1 ? "" : "n"} · ${fmtTime(f.createdAt)}${todos ? ` · ${open}/${todos} To-dos offen` : ""}</span>
           ${f.summary ? `<span class="folder-preview">${esc(f.summary.kurzfassung)}</span>` : ""}
         </span>
-        ${busy[f.id] ? `<span class="spinner" aria-label="wird verarbeitet"></span>` : ""}
+        ${paused[f.id] ? `<span class="badge">⏸ unterbrochen</span>` : busy[f.id] ? `<span class="spinner" aria-label="wird verarbeitet"></span>` : ""}
       </a>`;
   }
 
@@ -821,6 +863,7 @@ async function renderHome() {
 
 const STATUS_TEXT = {
   aufnahme: "Nimmt auf …",
+  pausiert: "Unterbrochen",
   neu: "Wartet …",
   transkribiere: "Transkribiere …",
   bessere: "Bessere Text nach …",
@@ -840,7 +883,8 @@ async function renderFolder(id) {
   const recBlock = isRecHere
     ? `<div class="recorder live">
         <div class="meter"><span id="meter-bar"></span></div>
-        <div class="rec-time" id="rec-time">${fmtDuration(activeRecorder.recorder.elapsed())}</div>
+        <div class="rec-time" id="rec-time">${fmtDuration(activeRecorder.baseDuration + activeRecorder.recorder.elapsed())}</div>
+        ${activeRecorder.recorder.needsTap ? `<button class="btn primary big" data-action="resume-mic">Mikrofon wieder an – weiter aufnehmen</button>` : ""}
         <button class="btn stop big" data-action="stop"><span class="stop-sq" aria-hidden="true"></span> Aufnahme beenden</button>
         <p class="hint">Am iPhone pausiert das Mikrofon, solange du in einer anderen App bist oder das Handy gesperrt ist. Beim Zurückkommen läuft die Aufnahme automatisch weiter. Für lange Aufnahmen im Hintergrund die Sprachmemos-App nutzen und die Datei hier hinzufügen.</p>
       </div>`
@@ -933,6 +977,13 @@ async function renderFolder(id) {
           ${working || r.status === "aufnahme" ? `<span class="status"><span class="spinner"></span>${esc(statusText)}</span>` : ""}
           ${r.status === "fehler" ? `<span class="status err">Fehler</span>` : ""}
         </header>
+        ${r.status === "pausiert" ? `<div class="paused">
+            <p><b>Aufnahme wurde unterbrochen</b> – das iPhone hat die App im Hintergrund beendet. Alles bis dahin ist gespeichert.</p>
+            <div class="row wrap">
+              <button class="btn primary" data-action="continue-rec" ${activeRecorder ? "disabled" : ""}><span class="rec-dot" aria-hidden="true"></span> Weiter aufnehmen</button>
+              <button class="btn" data-action="finish-rec">Beenden &amp; auswerten</button>
+            </div>
+          </div>` : ""}
         ${r.status === "fehler" ? `<p class="error">${esc(r.error)}</p><button class="btn small" data-action="retry">Erneut versuchen</button>` : ""}
         ${r.segments.length ? `<div class="players">${r.segments.map((_, si) => `<audio controls preload="none" data-seg="${si}"></audio>`).join("")}</div>` : ""}
         ${r.transcript ? `
@@ -997,7 +1048,7 @@ function bindView() {
 function tick() {
   if (activeRecorder) {
     const t = $("#rec-time");
-    if (t) t.textContent = fmtDuration(activeRecorder.recorder.elapsed());
+    if (t) t.textContent = fmtDuration(activeRecorder.baseDuration + activeRecorder.recorder.elapsed());
     const bar = $("#meter-bar");
     if (bar) bar.style.transform = `scaleX(${0.04 + activeRecorder.recorder.level() * 0.96})`;
   }
@@ -1058,6 +1109,14 @@ view.addEventListener("click", async (e) => {
       break;
     }
     case "record": await startRecording(route.id); break;
+    case "continue-rec": await startRecording(route.id, recId); break;
+    case "finish-rec": {
+      await updateRecording(recId, { status: "neu" });
+      processRecording(recId);
+      render();
+      break;
+    }
+    case "resume-mic": btn.disabled = true; await activeRecorder?.recorder.recover(true); render(); break;
     case "stop": btn.disabled = true; await stopRecording(); break;
     case "retry": {
       await updateRecording(recId, { status: "neu", error: null });
@@ -1189,8 +1248,9 @@ dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
 async function resumePending() {
   const recs = await store.allRecordings();
   for (const r of recs) {
-    if (r.status === "aufnahme") {
-      if (r.segments.length) await updateRecording(r.id, { status: "neu", duration: r.duration || r.segments.length * SEGMENT_MS / 1000 });
+    if (r.status === "aufnahme" && activeRecorder?.recordingId !== r.id) {
+      // iOS hat die App im Hintergrund beendet → Aufnahme als "unterbrochen" behalten, zum Weitermachen
+      if (r.segments.length) await updateRecording(r.id, { status: "pausiert" });
       else { await store.deleteRecording(r.id); continue; }
     }
     if (["neu", "transkribiere", "bessere"].includes(r.status)) processRecording(r.id);
@@ -1227,8 +1287,8 @@ async function onLoggedIn(data) {
   serverFeatures = data.features || {};
   $("#open-settings").hidden = false;
   parseRoute();
+  await resumePending();
   await render();
-  resumePending();
 }
 
 view.addEventListener("submit", async (e) => {

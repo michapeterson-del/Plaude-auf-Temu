@@ -53,7 +53,10 @@ iOS erlaubt Web-Apps **kein Mikrofon im Hintergrund**. Plaude geht damit so um:
 
 - Beim Verlassen der App wird alles bis dahin Aufgenommene sofort gespeichert.
 - Beim Zurückkommen läuft die Aufnahme **automatisch in derselben Aufnahme weiter** (angezeigt als „1× unterbrochen“).
-  Was in der Zwischenzeit gesagt wurde, ist allerdings nicht drauf.
+  Lässt iOS das Mikrofon nicht von selbst wieder an, erscheint der Knopf **„Mikrofon wieder an – weiter aufnehmen“**.
+- Hat iOS die App im Hintergrund ganz beendet, steht beim nächsten Öffnen **„Aufnahme wurde unterbrochen“** mit
+  **„Weiter aufnehmen“** (gleiche Aufnahme) oder **„Beenden & auswerten“**.
+- Was in der Zwischenzeit gesagt wurde, ist allerdings nicht drauf.
 - **Für durchgehende Aufnahmen mit WhatsApp/gesperrtem Handy:** mit der Apple-App **Sprachmemos** aufnehmen
   (läuft im Hintergrund weiter) → Memo teilen → **„In Dateien sichern“** → in Plaude **„Audiodatei hinzufügen“**.
   Auch lange Memos gehen: Plaude teilt große Dateien selbst in kleine Stücke.
