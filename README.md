@@ -61,6 +61,35 @@ iOS erlaubt Web-Apps **kein Mikrofon im Hintergrund**. Plaude geht damit so um:
   (läuft im Hintergrund weiter) → Memo teilen → **„In Dateien sichern“** → in Plaude **„Audiodatei hinzufügen“**.
   Auch lange Memos gehen: Plaude teilt große Dateien selbst in kleine Stücke.
 
+## iPhone-App (nimmt im Hintergrund weiter auf)
+
+Die Web-App darf auf dem iPhone im Hintergrund nicht aufnehmen. Dafür gibt es eine kleine **echte App** (`ios/`):
+Sie zeigt dieselbe Plaude-Seite, das Aufnehmen macht aber das iPhone selbst. Die Aufnahme läuft also weiter,
+auch mit WhatsApp im Vordergrund, bei gesperrtem Handy, und nach Anrufen.
+
+GitHub baut die App bei jeder Änderung unter `ios/` automatisch. Die neueste Datei liegt immer hier:
+**https://github.com/michapeterson-del/Plaude-auf-Temu/releases/latest/download/Plaude.ipa**
+
+### Einmalig einrichten (Windows-PC, normale Apple-ID, kostenlos)
+
+1. Auf dem PC **iTunes** und **iCloud** von apple.com installieren (nicht die Microsoft-Store-Versionen).
+2. **SideStore** einrichten: Anleitung auf https://sidestore.io (*Get Started*). Dabei meldest du dich in
+   SideStore mit deiner Apple-ID an. Das Passwort geht nur an Apple.
+3. Auf dem iPhone: Einstellungen → Datenschutz & Sicherheit → **Entwicklermodus** einschalten (Neustart).
+4. Den Link oben in Safari öffnen → `Plaude.ipa` laden → in **SideStore** auf „+“ tippen und die Datei aus *Downloads* wählen.
+5. Einstellungen → Allgemein → VPN & Geräteverwaltung → deiner Apple-ID **vertrauen**.
+6. Plaude öffnen → Adresse deiner Vercel-Seite bestätigen → anmelden → Mikrofon erlauben.
+
+### Alle 7 Tage erneuern
+
+Mit einer normalen Apple-ID läuft die App 7 Tage. In **SideStore** auf **„Refresh All“** tippen (geht ohne PC).
+Tipp: In der Kurzbefehle-App eine Automation „Täglich“ → SideStore *Refresh All* anlegen, dann passiert es von selbst.
+Aufnahmen und Daten bleiben beim Erneuern erhalten.
+
+### Update installieren
+
+Neue Version wie in Schritt 4 laden und in SideStore installieren. Daten bleiben erhalten.
+
 ## Dateien
 
 ```
@@ -71,6 +100,7 @@ api/claude.js                 Nachbessern + Zusammenfassung (Claude, Anweisungen
 api/todo.js                   To-dos in den Aufgabenplaner (Supabase "tasks")
 lib/server.js                 Login-Cookie, Hilfsfunktionen
 vercel.json                   Laufzeit + Sicherheits-Header
+ios/                          iPhone-App (SwiftUI + nativer Rekorder), gebaut von .github/workflows/ios.yml
 ```
 
 ## Kosten (ungefähr)
