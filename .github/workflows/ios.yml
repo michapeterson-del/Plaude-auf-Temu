@@ -1,0 +1,64 @@
+# Baut die iPhone-App (unsigniert) auf einem Mac bei GitHub und stellt die .ipa als Release bereit.
+# Installiert wird sie mit SideStore/AltStore – die signieren mit der eigenen Apple-ID.
+name: iPhone-App bauen
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: XcodeGen installieren
+        run: brew install xcodegen
+
+      - name: Xcode-Projekt erzeugen
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: App bauen
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Plaude.xcodeproj \
+            -scheme Plaude \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | grep -E "error|warning: .*Plaude|BUILD" || true
+          test -d build/Build/Products/Release-iphoneos/Plaude.app
+
+      - name: IPA packen
+        run: |
+          mkdir -p Payload
+          cp -R ios/build/Build/Products/Release-iphoneos/Plaude.app Payload/
+          zip -qry Plaude.ipa Payload
+          ls -lh Plaude.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Plaude-ipa
+          path: Plaude.ipa
+
+      - name: Als Release veröffentlichen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "app-${{ github.run_number }}" Plaude.ipa \
+            --title "Plaude iPhone-App (Build ${{ github.run_number }})" \
+            --notes "Mit SideStore/AltStore installieren. Neueste Version immer unter: https://github.com/${{ github.repository }}/releases/latest/download/Plaude.ipa" \
+            --latest

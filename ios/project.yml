@@ -1,0 +1,36 @@
+# Xcode-Projekt wird daraus automatisch erzeugt (XcodeGen), siehe .github/workflows/ios.yml
+name: Plaude
+options:
+  bundleIdPrefix: de.michapeterson
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  Plaude:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+      - Resources
+    scheme: {}
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Plaude
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        NSMicrophoneUsageDescription: "Plaude nimmt deine Gespräche auf, um sie zu transkribieren und zusammenzufassen."
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: de.michapeterson.plaude
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "1.0"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""

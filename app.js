@@ -321,11 +321,141 @@ class Recorder {
   }
 }
 
+/* ============================================================
+   iPhone-App: natives Aufnehmen (läuft im Hintergrund weiter)
+   ============================================================ */
+const nativeBridge = window.plaudeNative && window.webkit?.messageHandlers?.plaude
+  ? window.webkit.messageHandlers.plaude
+  : null;
+const callNative = (action, extra = {}) => nativeBridge.postMessage({ action, ...extra });
+
+function b64ToBlob(b64, type) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type });
+}
+
+/** Holt fertige Audio-Stücke aus der App und hängt sie an die passende Aufnahme. */
+let collecting = null;
+function collectNative() {
+  if (!nativeBridge) return Promise.resolve();
+  if (collecting) return collecting;
+  collecting = (async () => {
+    for (let round = 0; round < 100; round++) {
+      const segs = await callNative("collect");
+      if (!Array.isArray(segs) || !segs.length) break;
+      for (const sg of segs) {
+        let r = await store.recording(sg.tag);
+        if (!r) r = await recoverOrphan(sg.tag);
+        const blob = b64ToBlob(sg.data, sg.mime || "audio/mp4");
+        const updated = await updateRecording(r.id, (x) => {
+          const index = x.segments.reduce((m, seg) => Math.max(m, seg.index + 1), 0);
+          return {
+            segments: [...x.segments, { index, blob, mime: blob.type, name: sg.id }],
+            ...(x.status === "aufnahme" ? {} : { duration: (x.duration || 0) + (sg.seconds || 0) }),
+          };
+        });
+        // Nachzügler zu einer schon fertigen Aufnahme: nur das neue Stück verarbeiten
+        if (updated && ["fertig", "fehler"].includes(updated.status)) {
+          await updateRecording(r.id, { status: "neu" });
+          processRecording(r.id);
+        }
+      }
+      await callNative("ack", { ids: segs.map((sg) => sg.id) });
+    }
+  })().catch((err) => console.error(err)).finally(() => { collecting = null; });
+  return collecting;
+}
+
+/** Audio ohne passende Aufnahme (z. B. Daten gelöscht) nicht wegwerfen. */
+async function recoverOrphan(tag) {
+  const folders = await store.folders();
+  let f = folders.find((x) => x.name === "Wiederhergestellte Aufnahmen");
+  if (!f) {
+    f = { id: uid(), name: "Wiederhergestellte Aufnahmen", createdAt: Date.now(), updatedAt: Date.now() };
+    await store.putFolder(f);
+  }
+  const rec = {
+    id: tag || uid(), folderId: f.id, createdAt: Date.now(), source: "aufnahme", status: "neu",
+    segments: [], duration: 0, transcript: "", rawTranscript: "",
+  };
+  await store.putRecording(rec);
+  return rec;
+}
+
+class NativeRecorder {
+  constructor(recordingId) {
+    this.recordingId = recordingId;
+    this.interruptions = 0;
+    this.needsTap = false;
+    this._level = 0;
+  }
+
+  async start() {
+    const r = await callNative("start", { tag: this.recordingId });
+    if (!r?.ok) {
+      const err = new Error(r?.error || "Mikrofon konnte nicht gestartet werden.");
+      err.name = r?.denied ? "NotAllowedError" : "Error";
+      throw err;
+    }
+    this.attach(r.startedAt);
+  }
+
+  /** Auch nach einem Neuladen der Seite wieder an eine laufende Aufnahme andocken. */
+  attach(startedAt) {
+    this.startedAt = startedAt || Date.now();
+    this._statusTimer = setInterval(async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        const st = await callNative("status");
+        this._level = st.level || 0;
+        this.interruptions = st.interruptions || 0;
+      } catch { /* egal */ }
+    }, 250);
+    this._collectTimer = setInterval(() => {
+      if (document.visibilityState === "visible") collectNative();
+    }, 20000);
+  }
+
+  level() { return this._level; }
+  elapsed() { return (Date.now() - this.startedAt) / 1000; }
+  recover() { return collectNative(); }
+
+  async stop() {
+    clearInterval(this._statusTimer);
+    clearInterval(this._collectTimer);
+    await callNative("stop");
+    await collectNative();
+  }
+}
+
+async function reattachNative() {
+  if (!nativeBridge || activeRecorder) return;
+  try {
+    const st = await callNative("status");
+    if (!st?.recording || !st.tag) return;
+    const rec = await store.recording(st.tag);
+    if (!rec) return;
+    const recorder = new NativeRecorder(rec.id);
+    recorder.attach(st.startedAt);
+    activeRecorder = { recorder, folderId: rec.folderId, recordingId: rec.id, baseDuration: 0, baseInterruptions: 0 };
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+if (nativeBridge) {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") collectNative();
+  });
+}
+
 let activeRecorder = null; // { recorder, folderId, recordingId }
 
 async function startRecording(folderId, continueId = null) {
   if (activeRecorder) return;
-  if (!window.MediaRecorder) {
+  if (!nativeBridge && !window.MediaRecorder) {
     toast("Dieser Browser kann leider nicht aufnehmen.");
     return;
   }
@@ -347,7 +477,7 @@ async function startRecording(folderId, continueId = null) {
   const baseDuration = continueId ? rec.duration || 0 : 0;
   const startIndex = rec.segments.reduce((m, sg) => Math.max(m, sg.index + 1), 0);
 
-  const recorder = new Recorder(rec.id, async (index, blob) => {
+  const recorder = nativeBridge ? new NativeRecorder(rec.id) : new Recorder(rec.id, async (index, blob) => {
     await updateRecording(rec.id, (r) => {
       const segments = [...r.segments, { index, blob, mime: blob.type }].sort((a, b) => a.index - b.index);
       // Dauer laufend mitspeichern, falls iOS die App im Hintergrund beendet
@@ -886,7 +1016,9 @@ async function renderFolder(id) {
         <div class="rec-time" id="rec-time">${fmtDuration(activeRecorder.baseDuration + activeRecorder.recorder.elapsed())}</div>
         ${activeRecorder.recorder.needsTap ? `<button class="btn primary big" data-action="resume-mic">Mikrofon wieder an – weiter aufnehmen</button>` : ""}
         <button class="btn stop big" data-action="stop"><span class="stop-sq" aria-hidden="true"></span> Aufnahme beenden</button>
-        <p class="hint">Am iPhone pausiert das Mikrofon, solange du in einer anderen App bist oder das Handy gesperrt ist. Beim Zurückkommen läuft die Aufnahme automatisch weiter. Für lange Aufnahmen im Hintergrund die Sprachmemos-App nutzen und die Datei hier hinzufügen.</p>
+        ${nativeBridge
+          ? `<p class="hint">Du kannst die App verlassen, andere Apps nutzen oder das Handy sperren – die Aufnahme läuft weiter.</p>`
+          : `<p class="hint">Am iPhone pausiert das Mikrofon, solange du in einer anderen App bist oder das Handy gesperrt ist. Beim Zurückkommen läuft die Aufnahme automatisch weiter. Für lange Aufnahmen im Hintergrund die Sprachmemos-App nutzen und die Datei hier hinzufügen.</p>`}
       </div>`
     : `<div class="recorder">
         <button class="btn primary big" data-action="record" ${otherRec ? "disabled" : ""}>
@@ -957,7 +1089,7 @@ async function renderFolder(id) {
         </button>
         <button class="btn ghost" data-action="copy">Kopieren</button>
         ${navigator.share ? `<button class="btn ghost" data-action="share">Teilen</button>` : ""}
-        <button class="btn ghost" data-action="download">Als Datei</button>
+        ${nativeBridge ? "" : `<button class="btn ghost" data-action="download">Als Datei</button>`}
       </div>
       ${f.summaryError ? `<p class="error">${esc(f.summaryError)}</p>` : ""}`
     : "";
@@ -1228,6 +1360,14 @@ function updateTodoAppHint() {
   form.querySelector(".planner-only").hidden = v !== "aufgabenplaner";
 }
 $("#logout").addEventListener("click", logout);
+if (nativeBridge) {
+  const changeServer = $("#change-server");
+  changeServer.hidden = false;
+  changeServer.addEventListener("click", () => {
+    if (activeRecorder) { toast("Erst die Aufnahme beenden."); return; }
+    if (confirm("Server-Adresse der App ändern?")) callNative("resetServer");
+  });
+}
 form.elements.todoApp.addEventListener("change", updateTodoAppHint);
 form.addEventListener("submit", () => {
   const next = { ...settings };
@@ -1249,6 +1389,14 @@ async function resumePending() {
   const recs = await store.allRecordings();
   for (const r of recs) {
     if (r.status === "aufnahme" && activeRecorder?.recordingId !== r.id) {
+      if (nativeBridge) {
+        // App hat weiter aufgenommen, aber die Aufnahme ist schon beendet → auswerten
+        await collectNative();
+        const fresh = await store.recording(r.id);
+        if (fresh?.segments.length) { await updateRecording(r.id, { status: "neu" }); processRecording(r.id); }
+        else await store.deleteRecording(r.id);
+        continue;
+      }
       // iOS hat die App im Hintergrund beendet → Aufnahme als "unterbrochen" behalten, zum Weitermachen
       if (r.segments.length) await updateRecording(r.id, { status: "pausiert" });
       else { await store.deleteRecording(r.id); continue; }
@@ -1287,6 +1435,8 @@ async function onLoggedIn(data) {
   serverFeatures = data.features || {};
   $("#open-settings").hidden = false;
   parseRoute();
+  await reattachNative();
+  await collectNative();
   await resumePending();
   await render();
 }
