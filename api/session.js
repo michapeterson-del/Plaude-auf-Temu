@@ -1,7 +1,7 @@
 // GET: Anmeldestatus · POST: anmelden · DELETE: abmelden
-import { checkPassword, clearCookie, fail, isAuthed, json, sessionCookie } from "../lib/server.js";
+import { checkPassword, clearCookie, fail, isAuthed, json, sessionCookie, todoConfig } from "../lib/server.js";
 
-const features = () => ({ aufgabenplaner: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) });
+const features = () => ({ aufgabenplaner: Boolean(todoConfig()) });
 
 export async function GET(request) {
   if (!process.env.APP_PASSWORD) return fail("APP_PASSWORD ist auf dem Server nicht gesetzt.", 500);

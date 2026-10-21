@@ -523,7 +523,7 @@ window.addEventListener("beforeunload", (e) => {
 /* ============================================================
    Server-Aufrufe (Schlüssel liegen nur auf dem Server)
    ============================================================ */
-const MAX_UPLOAD = 4.3 * 1024 * 1024; // Grenze für eine Anfrage an Vercel
+const MAX_UPLOAD = 4.3 * 1024 * 1024; // kleine Stücke: sicher für Proxy und Upload über Mobilfunk
 
 class AuthError extends Error {}
 
@@ -956,7 +956,7 @@ async function renderHome() {
   }
 
   const setupHint = settings.todoApp === "aufgabenplaner" && serverFeatures && !serverFeatures.aufgabenplaner
-    ? `<button class="notice" data-action="settings">Der Aufgabenplaner ist auf dem Server noch nicht eingerichtet (SUPABASE_URL / SUPABASE_ANON_KEY) – oder in den <b>Einstellungen</b> eine andere To-do-App wählen.</button>`
+    ? `<button class="notice" data-action="settings">Der Aufgabenplaner ist auf dem Server noch nicht eingerichtet (TODO_API_URL / TODO_API_KEY) – oder in den <b>Einstellungen</b> eine andere To-do-App wählen.</button>`
     : "";
 
   let groups = "";

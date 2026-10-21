@@ -4,7 +4,7 @@ name: iPhone-App bauen
 
 on:
   push:
-    branches: [main]
+    branches: [coolify]
     paths:
       - "ios/**"
       - ".github/workflows/ios.yml"

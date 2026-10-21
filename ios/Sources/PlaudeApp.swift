@@ -16,9 +16,9 @@ struct PlaudeApp: App {
     }
 }
 
-/// Erster Start: Adresse der eigenen Plaude-Seite (Vercel) eintragen.
+/// Erster Start: Adresse der eigenen Plaude-Seite eintragen.
 struct SetupView: View {
-    @State private var address = "https://plaude-auf-temu.vercel.app"
+    @State private var address = "https://plaude.micha-apps.de"
     let onDone: (String) -> Void
 
     private var normalized: String? {
@@ -36,7 +36,7 @@ struct SetupView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Plaude")
                 .font(.largeTitle.bold())
-            Text("Adresse deiner Plaude-Seite (bei Vercel):")
+            Text("Adresse deiner Plaude-Seite:")
                 .foregroundStyle(.secondary)
             TextField("https://…", text: $address)
                 .textInputAutocapitalization(.never)

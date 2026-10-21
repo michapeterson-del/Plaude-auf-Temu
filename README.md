@@ -2,7 +2,7 @@
 
 Web-App fürs Handy: Gespräche aufnehmen, sauber transkribieren lassen und pro **Ordner**
 (z. B. „Einkauf Baumarkt 14:30“) eine gemeinsame Zusammenfassung mit Stichpunkten und To-dos bekommen.
-Jedes To-do landet per Knopfdruck direkt im **Aufgabenplaner** (Repo `To-do`, gleiche Supabase-Datenbank).
+Jedes To-do landet per Knopfdruck direkt im **Aufgabenplaner** (Repo `To-do`, API unter `aufgaben.micha-apps.de`).
 
 ## So funktioniert's
 
@@ -22,30 +22,36 @@ Jedes To-do landet per Knopfdruck direkt im **Aufgabenplaner** (Repo `To-do`, gl
 
 - **Passwort-Login**: Ohne `APP_PASSWORD` kommt niemand an die Server-Funktionen (Transkription, Claude, Aufgabenplaner).
   Die Anmeldung ist ein signiertes, `HttpOnly`-/`Secure`-/`SameSite=Strict`-Cookie (30 Tage). Falsche Passwörter werden ausgebremst.
-- **Keine Schlüssel auf dem Handy oder im Code**: OpenAI-, Anthropic- und Supabase-Schlüssel liegen nur in den
-  Umgebungsvariablen bei Vercel.
+- **Keine Schlüssel auf dem Handy oder im Code**: OpenAI-, Anthropic- und Aufgabenplaner-Schlüssel liegen nur in den
+  Umgebungsvariablen in Coolify.
 - **Aufnahmen bleiben auf deinem Gerät** (IndexedDB im Browser). Zum Transkribieren geht ein Audio-Stück einmal durch
-  die Vercel-Funktion an OpenAI und wird dabei nirgends gespeichert. In der Datenbank landen nur die To-dos, die du abschickst.
+  den eigenen Server an OpenAI und wird dabei nirgends gespeichert. In der Datenbank landen nur die To-dos, die du abschickst.
 - Strenge Sicherheits-Header (Content-Security-Policy, kein Einbetten in fremde Seiten, `noindex`).
 
-## Einrichtung auf Vercel
+## Betrieb (Hetzner-Server mit Coolify)
 
-1. Auf [vercel.com](https://vercel.com) mit GitHub anmelden → **Add New… → Project** → Repo `Plaude-auf-Temu` importieren
-   (Framework: *Other*, keine Build-Einstellungen nötig).
-2. Unter **Settings → Environment Variables** eintragen:
+- Adresse: **https://plaude.micha-apps.de**
+- Branch **`coolify`**: Coolify baut bei jedem Push automatisch neu. Andere Branches gehen nicht live.
+- Start: `npm start` → `serve.js` liefert die Seite aus und leitet `/api/<name>` an `api/<name>.js` weiter
+  (Port aus `PORT`, Standard 3000; HTTPS macht Traefik davor).
+- Plaude speichert selbst nichts auf dem Server (keine Volumes, keine Datenbank). Aufnahmen bleiben auf dem Handy.
+- `vercel.json` wird nicht mehr benutzt.
 
-   | Name | Wert |
-   |---|---|
-   | `APP_PASSWORD` | Dein Passwort für die App – lang und eindeutig wählen |
-   | `OPENAI_API_KEY` | https://platform.openai.com/api-keys |
-   | `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys |
-   | `SUPABASE_URL` | Dieselbe wie im Aufgabenplaner (`https://xxxx.supabase.co`) |
-   | `SUPABASE_ANON_KEY` | Derselbe anon key wie im Aufgabenplaner |
+Umgebungsvariablen (werden in Coolify gepflegt, nicht im Code):
 
-   Optional: `CLAUDE_MODEL` (Standard `claude-opus-5-5`), `OPENAI_TRANSCRIBE_MODEL` (Standard `gpt-4o-transcribe`),
-   `SESSION_SECRET` (beliebige lange Zeichenfolge; ändern meldet alle Geräte ab).
-3. **Deploy** (bzw. nach dem Eintragen der Variablen einmal *Redeploy*).
-4. Die Vercel-Adresse in Safari öffnen → anmelden → **Teilen → Zum Home-Bildschirm**.
+| Name | Wert |
+|---|---|
+| `APP_PASSWORD` | Passwort für die App – lang und eindeutig |
+| `OPENAI_API_KEY` | OpenAI-Schlüssel (Transkription) |
+| `ANTHROPIC_API_KEY` | Anthropic-Schlüssel (Nachbessern, Zusammenfassung) |
+| `TODO_API_URL` | `https://aufgaben.micha-apps.de` (ohne `/rest/v1`) |
+| `TODO_API_KEY` | Der `API_KEY` des Aufgabenplaners (Repo `Server`, Ordner `todo-api`) |
+
+Die alten Namen `SUPABASE_URL` / `SUPABASE_ANON_KEY` funktionieren übergangsweise weiter.
+Optional: `CLAUDE_MODEL` (Standard `claude-opus-5-5`), `OPENAI_TRANSCRIBE_MODEL` (Standard `gpt-4o-transcribe`),
+`SESSION_SECRET` (lange Zeichenfolge; ändern meldet alle Geräte ab).
+
+Im Browser: Adresse in Safari öffnen → anmelden → **Teilen → Zum Home-Bildschirm**.
 
 ### Aufnehmen, während man andere Apps nutzt oder das Handy sperrt
 
@@ -78,7 +84,7 @@ GitHub baut die App bei jeder Änderung unter `ios/` automatisch. Die neueste Da
 3. Auf dem iPhone: Einstellungen → Datenschutz & Sicherheit → **Entwicklermodus** einschalten (Neustart).
 4. Den Link oben in Safari öffnen → `Plaude.ipa` laden → in **SideStore** auf „+“ tippen und die Datei aus *Downloads* wählen.
 5. Einstellungen → Allgemein → VPN & Geräteverwaltung → deiner Apple-ID **vertrauen**.
-6. Plaude öffnen → Adresse deiner Vercel-Seite bestätigen → anmelden → Mikrofon erlauben.
+6. Plaude öffnen → Adresse `https://plaude.micha-apps.de` bestätigen → anmelden → Mikrofon erlauben.
 
 ### Alle 7 Tage erneuern
 
@@ -97,9 +103,10 @@ index.html, app.js, app.css   Oberfläche (Aufnahme, Speicher, Ansichten)
 api/session.js                Anmelden / Abmelden / Status
 api/transcribe.js             Audio-Stück → OpenAI → Text
 api/claude.js                 Nachbessern + Zusammenfassung (Claude, Anweisungen liegen hier)
-api/todo.js                   To-dos in den Aufgabenplaner (Supabase "tasks")
+api/todo.js                   To-dos in den Aufgabenplaner (PostgREST, Tabelle "tasks")
 lib/server.js                 Login-Cookie, Hilfsfunktionen
-vercel.json                   Laufzeit + Sicherheits-Header
+serve.js                      Node-Server für Coolify (npm start)
+vercel.json                   veraltet, wird nicht mehr benutzt
 ios/                          iPhone-App (SwiftUI + nativer Rekorder), gebaut von .github/workflows/ios.yml
 ```
 
@@ -108,4 +115,3 @@ ios/                          iPhone-App (SwiftUI + nativer Rekorder), gebaut vo
 - Transkription `gpt-4o-transcribe`: ca. 0,6 US-Cent pro Minute Audio.
 - Claude (`claude-opus-5-5`): je nach Länge wenige Cent pro Ordner. Günstiger: `CLAUDE_MODEL=claude-sonnet-5-5`
   setzen oder das Nachbessern in den Einstellungen abschalten.
-- Vercel Hobby (kostenlos) reicht für den persönlichen Gebrauch.

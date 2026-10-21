@@ -1,11 +1,13 @@
-// Legt To-dos direkt im Aufgabenplaner an (Supabase-Tabelle "tasks").
-import { fail, json, requireAuth, requireEnv } from "../lib/server.js";
+// Legt To-dos direkt im Aufgabenplaner an (Tabelle "tasks", PostgREST unter <TODO_API_URL>/rest/v1/).
+import { fail, json, requireAuth, todoConfig } from "../lib/server.js";
 
 const CATEGORIES = ["today", "process", "private"];
 
 export async function POST(request) {
-  const denied = requireAuth(request) || requireEnv("SUPABASE_URL", "SUPABASE_ANON_KEY");
+  const denied = requireAuth(request);
   if (denied) return denied;
+  const todo = todoConfig();
+  if (!todo) return fail("Auf dem Server fehlt: TODO_API_URL, TODO_API_KEY", 500);
 
   let body;
   try { body = await request.json(); } catch { return fail("Ungültige Anfrage."); }
@@ -23,8 +25,8 @@ export async function POST(request) {
     .filter((t) => t.title);
   if (!tasks.length) return fail("Keine Aufgaben übergeben.");
 
-  const key = process.env.SUPABASE_ANON_KEY;
-  const res = await fetch(`${process.env.SUPABASE_URL.replace(/\/$/, "")}/rest/v1/tasks`, {
+  const key = todo.key;
+  const res = await fetch(`${todo.url}/rest/v1/tasks`, {
     method: "POST",
     headers: {
       apikey: key,
